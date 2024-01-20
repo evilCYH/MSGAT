@@ -7,15 +7,18 @@ from torch_geometric.nn import GATConv, SAGPooling, global_mean_pool, global_max
 
 
 class SimpleMLP(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, use_sigmoid=False):
         super(SimpleMLP, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = 8
-        self.layers = nn.Sequential(
-            nn.Linear(input_dim, self.hidden_dim),  # 从3个特征到10个特征
+        layers = [
+            nn.Linear(input_dim, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_dim, 1)  # 最终输出一个加权值
-        )
+            nn.Linear(self.hidden_dim, 1)
+        ]
+        if use_sigmoid:
+            layers.append(nn.Sigmoid())
+        self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.layers(x)
@@ -179,7 +182,7 @@ class CategoricalGraphAtt(nn.Module):
 
         # 创建 MLP 实例
         reg_mlp = SimpleMLP(len(self.time_step_list)).to(self.device)
-        cls_mlp = SimpleMLP(len(self.time_step_list)).to(self.device)
+        cls_mlp = SimpleMLP(len(self.time_step_list), use_sigmoid=True).to(self.device)
 
         # 通过 MLP 处理合并的张量
         reg_predict = reg_mlp(combined_reg)
@@ -193,12 +196,12 @@ class CategoricalGraphAtt(nn.Module):
     def predict_toprank(self, test_data, device, top_k=5):  # test_data : 384,480,10
         y_pred_all_reg, y_pred_all_cls = [], []
         # test_w1, test_w2, test_w3 = test_data
-        for idx in range(test_data.shape[0]-self.block_day):
+        for idx in range(test_data.shape[0] - self.block_day):
             # batch_x1, batch_x2, batch_x3 = test_w1[idx].to(self.device), \
             #     test_w2[idx].to(self.device), \
             #     test_w3[idx].to(self.device)
             # batch_weekly = [batch_x1, batch_x2, batch_x3]
-            batch_x = test_data[idx:(idx+32)]
+            batch_x = test_data[idx:(idx + 32)]
             pred_reg, pred_cls = self.forward(batch_x)  # pred_reg, pred_cls : 480, 1
             pred_reg, pred_cls = pred_reg.cpu().detach().numpy(), pred_cls.cpu().detach().numpy()
             y_pred_all_reg.extend(pred_reg.tolist())
