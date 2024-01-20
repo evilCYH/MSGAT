@@ -190,15 +190,16 @@ class CategoricalGraphAtt(nn.Module):
 
         return reg_predict, cls_predict
 
-    def predict_toprank(self, test_data, device, top_k=5):
+    def predict_toprank(self, test_data, device, top_k=5):  # test_data : 384,480,10
         y_pred_all_reg, y_pred_all_cls = [], []
-        test_w1, test_w2, test_w3 = test_data
-        for idx, _ in enumerate(test_w2):
-            batch_x1, batch_x2, batch_x3 = test_w1[idx].to(self.device), \
-                test_w2[idx].to(self.device), \
-                test_w3[idx].to(self.device)
-            batch_weekly = [batch_x1, batch_x2, batch_x3]
-            pred_reg, pred_cls = self.forward(batch_weekly)
+        # test_w1, test_w2, test_w3 = test_data
+        for idx in range(test_data.shape[0]-self.block_day):
+            # batch_x1, batch_x2, batch_x3 = test_w1[idx].to(self.device), \
+            #     test_w2[idx].to(self.device), \
+            #     test_w3[idx].to(self.device)
+            # batch_weekly = [batch_x1, batch_x2, batch_x3]
+            batch_x = test_data[idx:(idx+32)]
+            pred_reg, pred_cls = self.forward(batch_x)  # pred_reg, pred_cls : 480, 1
             pred_reg, pred_cls = pred_reg.cpu().detach().numpy(), pred_cls.cpu().detach().numpy()
             y_pred_all_reg.extend(pred_reg.tolist())
             y_pred_all_cls.extend(pred_cls.tolist())

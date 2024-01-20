@@ -47,12 +47,12 @@ def train():
     inner_edge = np.array(np.load("./datasets/inner_edge.npy"))
     outer_edge = np.array(np.load("./datasets/outer_edge.npy"))
 
-    num_weeks = data["train"]["x"].shape[-2]  # 1536
+    num_days = data["train"]["x"].shape[-2]  # 1536
     input_dim = data["train"]["x"].shape[-1]  # 10
 
     lists = []
     weight_matrices = []
-    for i in range(num_weeks // block_day):
+    for i in range(num_days // block_day):
         x = torch.tensor(data['train']['x'][:, i * block_day:(i + 1) * block_day, :])
         period, weight = FFT_for_Period(x, k=6)
         lists.append(period)
@@ -80,7 +80,7 @@ def train():
     time_step_list = list(element_counts.keys())[1:-1]
     period_list = random.sample(time_step_list, 4)
 
-    train_size = int(num_weeks * 0.2)
+    train_size = int(num_days * 0.2)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # convert data into torch dtype
@@ -100,11 +100,11 @@ def train():
     # test_data = [test_w1, test_w2, test_w3]  # [-agg_week_num:]
 
     # label data
-    train_reg = torch.Tensor(data["train"]["y_return ratio"]).float()
-    train_cls = torch.Tensor(data["train"]["y_up_or_down"]).float()
-    test_y = data["test"]["y_return ratio"]
-    test_cls = data["test"]["y_up_or_down"]
-    test_shape = test_y.shape[0]
+    train_reg = torch.Tensor(data["train"]["y_return ratio"]).float().permute(1, 0)  # 1536, 480
+    train_cls = torch.Tensor(data["train"]["y_up_or_down"]).float().permute(1, 0)  # 1536, 480
+    test_reg = torch.Tensor(data["test"]["y_return ratio"]).float().permute(1, 0)  # 384,480
+    test_cls = torch.Tensor(data["test"]["y_up_or_down"]).float().permute(1, 0)  # 384,480
+    test_shape = test_reg.shape[0]
     loop_number = 100
     ks_list = [5, 10, 20]
 
@@ -124,7 +124,8 @@ def train():
     hidden_dim = 64
     use_gru = False
 
-    model = CategoricalGraphAtt(input_dim, period_list, hidden_dim, inner_edge, outer_edge, len_array, use_gru, block_day, device).to(device)
+    model = CategoricalGraphAtt(input_dim, period_list, hidden_dim, inner_edge, outer_edge, len_array, use_gru,
+                                block_day, device).to(device)
 
     # initialize parameters
     for p in model.parameters():
@@ -150,13 +151,14 @@ def train():
     c_loss = torch.tensor([]).float().to(device)
     ra_loss = torch.tensor([]).float().to(device)
 
-
     for epoch in range(epochs):
-        for idx in range(num_weeks//block_day):
+        for idx in range(num_days - block_day):
             model.train()  # prep to train model
-            batch_x = train_x[idx * block_day:(idx+1)*block_day].to(device)
-            batch_reg_y = train_reg[idx * block_day:(idx + 1) * block_day].view(-1, 1).to(device)
-            batch_cls_y = train_cls[idx * block_day:(idx + 1) * block_day].view(-1, 1).to(device)
+            batch_x = train_x[idx:(idx + 32)].to(device)
+            batch_reg_y = train_reg[idx + 32].to(device)
+            batch_cls_y = train_cls[idx + 32].to(device)
+
+            batch_reg_y, batch_cls_y = batch_reg_y.view(-1, 1), batch_cls_y.view(-1, 1)
             # batch_x1, batch_x2, batch_x3 = (
             #     train_w1[week].to(device),
             #     train_w2[week].to(device),
@@ -176,7 +178,7 @@ def train():
             r_loss = torch.cat((r_loss, reg_loss.view(-1, 1)))
             ra_loss = torch.cat((ra_loss, rank_loss.view(-1, 1)))
 
-            if (week + 1) % 1 == 0:
+            if (idx + 1) % 1 == 0:
                 cls_loss = beta * torch.mean(c_loss)
                 reg_loss = alpha * torch.mean(r_loss)
                 rank_loss = gamma * torch.sum(ra_loss)
@@ -187,31 +189,35 @@ def train():
                 r_loss = torch.tensor([]).float().to(device)
                 c_loss = torch.tensor([]).float().to(device)
                 ra_loss = torch.tensor([]).float().to(device)
-                if (week + 1) % 20 == 0:
-                    print(f"epoch {epoch}, week {week} : REG Loss:%.4f CLS Loss:%.4f RANK Loss:%.4f  Loss:%.4f" % (
-                    reg_loss.item(), cls_loss.item(), rank_loss.item(), loss.item()))
+                if (idx + 1) % 20 == 0:
+                    print(f"epoch {epoch}, block {idx} : REG Loss:%.4f CLS Loss:%.4f RANK Loss:%.4f  Loss:%.4f" % (
+                        reg_loss.item(), cls_loss.item(), rank_loss.item(), loss.item()))
 
         # evaluate
         model.eval()
         print("Evaluate at epoch %s" % (epoch + 1))
-        y_pred, y_pred_cls = model.predict_toprank([test_w1, test_w2, test_w3], device, top_k=5)
+        y_pred_reg, y_pred_cls = model.predict_toprank(test_x, device, top_k=5)
 
         # calculate metric
-        y_pred = np.array(y_pred).ravel()
-        test_y = np.array(test_y).ravel()
-        mae = round(mean_absolute_error(test_y, y_pred), 4)
-        acc_score = Acc(test_cls, y_pred)
+        y_pred_reg = np.array(y_pred_reg).ravel()
+        y_pred_cls = np.array(y_pred_cls).ravel()
+
+        test_reg = np.array(test_reg[block_day:]).ravel()
+        test_cls = np.array(test_cls[block_day:]).ravel()
+
+        mae = round(mean_absolute_error(test_reg, y_pred_reg), 4)
+        acc_score = Acc(test_cls, y_pred_cls)
 
         results = []
         for k in ks_list:
             IRRs, MRRs, Prs = [], [], []
             for i in range(test_shape):
-                M = MRR(np.array(test_y[loop_number * i: loop_number * (i + 1)]),
-                        np.array(y_pred[loop_number * i: loop_number * (i + 1)]), k=k)
+                M = MRR(np.array(test_reg[loop_number * i: loop_number * (i + 1)]),
+                        np.array(y_pred_reg[loop_number * i: loop_number * (i + 1)]), k=k)
                 MRRs.append(M)
                 P = Precision(
-                    np.array(test_y[loop_number * i: loop_number * (i + 1)]),
-                    np.array(y_pred[loop_number * i: loop_number * (i + 1)]), k=k
+                    np.array(test_reg[loop_number * i: loop_number * (i + 1)]),
+                    np.array(y_pred_reg[loop_number * i: loop_number * (i + 1)]), k=k
                 )
                 Prs.append(P)
             over_all = [mae, round(acc_score, 4), round(np.mean(MRRs), 4), round(np.mean(Prs), 4)]
